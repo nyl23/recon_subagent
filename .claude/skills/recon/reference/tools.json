@@ -1,0 +1,72 @@
+{
+  "_note": "recon-agent가 쓸 수 있는 도구의 단일 기준 정의(Single Source of Truth). recon-agent.md/SKILL.md는 도구 이름·플래그·wordlist 경로를 여기 정의를 참조하고 반복해서 적지 않는다. ⚠️ .claude/settings.json의 permissions.allow는 Claude Code 엔진이 직접 읽는 값이라 이 파일을 자동으로 참조하지 못한다 — 도구를 추가/제거했으면 'python tools/sync_permissions.py'를 실행해서 settings.json을 이 파일 기준으로 재생성해야 한다. (플래그·wordlist·스레드 수처럼 도구 이름 뒤에 오는 세부값은 settings.json이 애초에 제어하지 않으므로, 그런 조정은 이 파일만 고치면 된다.)",
+  "version": 1,
+  "tools": {
+    "curl": {
+      "exec": "local",
+      "role": ["기본정보수집", "서비스포트식별", "기술스택추정", "endpoint탐색"],
+      "purpose": "HTTP(S) 조회. WebFetch가 http를 https로 강제 업그레이드해서 실패할 때 대체 수단.",
+      "invocation": "curl {flags} {url}",
+      "allowed_use": "GET/HEAD 조회성만",
+      "forbidden": ["-X POST", "-X PUT", "-X DELETE", "--data", "--data-binary", "--data-urlencode"],
+      "notes": "상태를 바꾸는 요청 금지 (Safety Gate 규칙 2번과 동일한 이유 — 되돌릴 수 없음).",
+      "permission_patterns": ["Bash(curl *)"]
+    },
+    "nslookup": {
+      "exec": "local",
+      "role": ["기본정보수집"],
+      "purpose": "DNS 조회",
+      "invocation": "nslookup {domain}",
+      "condition": "target이 도메인일 때만 (IP 직접 대상이면 스킵)",
+      "permission_patterns": ["Bash(nslookup *)"]
+    },
+    "whois": {
+      "exec": "local",
+      "role": ["기본정보수집"],
+      "purpose": "도메인 등록 정보 조회",
+      "invocation": "whois {domain}",
+      "condition": "target이 도메인일 때만 (IP 직접 대상이면 스킵)",
+      "permission_patterns": ["Bash(whois *)"]
+    },
+    "nmap": {
+      "exec": "local",
+      "role": ["서비스포트식별"],
+      "purpose": "포트/서비스 존재 자체를 확인 (HTTP 응답만으로는 알 수 없는 것)",
+      "invocation_prefix": "PATH=\"/c/Program Files (x86)/Nmap:$PATH\" nmap",
+      "fixed_flags": "-Pn -sV --top-ports 500 -T3",
+      "forbidden_flags": ["-T4", "-T5", "--script vuln", "--script exploit", "CIDR/범위 대상"],
+      "scope_limit": "단일 host만, 포트 상위 500개만",
+      "condition": "HTTP 기반 추정만으로 부족할 때만 (이미 아는 포트 하나만 볼 거면 curl로 충분)",
+      "notes": "Windows 네이티브 설치(winget install Insecure.Nmap)로 전환됨(결정로그 #20) — 예전엔 WSL 경유였는데, WSL은 Windows 호스트에 직접 바인딩된 127.0.0.1 서비스에 도달 못 한다는 게 확인돼서(결정로그 #17) 네이티브로 옮김. `invocation_prefix`에 PATH를 직접 넣어둔 이유(결정로그 #21): winget이 설치 시 시스템 PATH를 갱신해도, 이미 떠 있던 Bash 세션은 그 변경을 못 보고 계속 예전 PATH를 쓴다(세션을 새로 열지 않는 한 `nmap`이라고만 쳐도 못 찾음) — 매번 즉흥적으로 PATH를 보정하지 않도록 여기 박아둔다. `--top-ports`를 100→500으로 올린 이유(결정로그 #23): nmap의 포트 빈도 데이터베이스 기준 top-100에는 `8080`/`8081`은 있어도 `8082`는 없어서, 랩 타겟 포트를 그냥 놓치는 경우가 실제로 있었다 — top-500엔 8082가 포함되고 정상 탐지됨을 직접 확인함. 흔치 않은 포트(예: 8082)는 서비스 핑거프린팅에 1분 가까이 걸릴 수 있으니 타임아웃을 넉넉히 잡는다 — 오래 걸리는 것과 막힌 것을 혼동하지 않는다.",
+      "permission_patterns": ["Bash(PATH=\"/c/Program Files (x86)/Nmap:$PATH\" nmap *)"]
+    },
+    "ffuf": {
+      "exec": "local",
+      "role": ["endpoint탐색"],
+      "purpose": "능동 디렉터리/파일 브루트포스 (수동 발견 방법이 부족할 때만). gobuster는 winget에 없어서 뺐고, ffuf 하나로 이 역할을 전담한다(결정로그 #20).",
+      "invocation_prefix": "PATH=\"/c/Users/KDT40/AppData/Local/Microsoft/WinGet/Packages/ffuf.ffuf_Microsoft.Winget.Source_8wekyb3d8bbwe:$PATH\" ffuf",
+      "invocation_example": "PATH=\"/c/Users/KDT40/AppData/Local/Microsoft/WinGet/Packages/ffuf.ffuf_Microsoft.Winget.Source_8wekyb3d8bbwe:$PATH\" ffuf -u {target}/FUZZ -w {wordlist} -t 10 -timeout 5 -mc 200,301,302,403 -s",
+      "wordlist": "tools/wordlists/common.txt",
+      "max_threads": 10,
+      "timeout": "5s",
+      "forbidden": "tools/wordlists/common.txt 외의 wordlist를 새로 만들거나 다운로드하는 것",
+      "condition": "Step 4의 수동적 방법(robots.txt/링크/JS 파싱/wayback)을 전부 시도한 뒤에만",
+      "notes": "Windows 네이티브 설치(winget install ffuf.ffuf)로 전환됨(결정로그 #20) — WSL 경유일 때 있던 127.0.0.1 도달 불가 문제가 없어짐. `invocation_prefix`에 PATH를 박아둔 이유는 nmap과 동일(결정로그 #21, 세션 PATH 갱신 지연). 이 경로는 이 컴퓨터의 사용자 계정(KDT40)에 종속적이다 — 다른 계정/머신이면 `winget list ffuf.ffuf`나 `Get-Command ffuf`로 실제 경로를 다시 확인해서 갱신해야 한다. -mc 필터에 없는 상태코드(예: 400)는 매칭 안 되니, 400을 반환하는 endpoint(예: 파라미터 누락)는 놓칠 수 있다는 점은 그대로 남아있다 — 의심되면 발견된 이웃 경로들 주변을 curl로 보완 확인한다.",
+      "permission_patterns": ["Bash(PATH=\"/c/Users/KDT40/AppData/Local/Microsoft/WinGet/Packages/ffuf.ffuf_Microsoft.Winget.Source_8wekyb3d8bbwe:$PATH\" ffuf *)"]
+    },
+    "validate_attack_surface": {
+      "exec": "local",
+      "role": ["출력검증"],
+      "purpose": "저장 직전 attack-surface.md가 후보 A' 규칙(신뢰도 필수, endpoint 표기 일관성)을 지키는지 자가 점검. 네트워크 요청 없음, 파일 읽기만 함.",
+      "invocation": "python tools/validate_attack_surface.py {path}",
+      "condition": "Step 7(저장 및 보고)에서 파일을 저장한 직후 항상 실행",
+      "on_fail": "지적된 줄을 규칙에 맞게 고치고 다시 검증한다. 계속 실패하면 Notes에 사유를 남기고 보고한다.",
+      "permission_patterns": ["Bash(python tools/validate_attack_surface.py *)"]
+    }
+  },
+  "common_rules": [
+    "여기 없는 명령/도구는 쓰지 않는다 — settings.json이 자동 승인하지 않아 실행되지 않는다.",
+    "능동 요청(curl 포함)은 전부 execution_log.jsonl에 기록한다.",
+    "scope 밖 대상에는 어떤 도구도 실행하지 않는다."
+  ]
+}

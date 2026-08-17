@@ -1,0 +1,6 @@
+# recon 실행 결과 (실제 조사 대상에 대한 민감할 수 있는 데이터) — 커밋하지 않음
+recon-output/
+
+# Python 바이트코드 캐시 (lab-target 실행 시 생성됨)
+__pycache__/
+*.pyc
