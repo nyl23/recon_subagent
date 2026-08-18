@@ -11,17 +11,19 @@ recon-agent가 결과를 어디에, 어떤 이름으로 저장할지에 대한 �
 ```
 recon-output/
   <target-slug>/
-    attack-surface.<ext>          ← 최신 결과 (후속 Agent·Orchestrator가 보는 "현재 상태")
+    findings.json                 ← 최신 결과 (후속 Agent·Orchestrator가 보는 "현재 상태")
     runs/
       <run-timestamp>/
-        attack-surface.<ext>      ← 그 실행 시점의 스냅샷
-        execution_log.jsonl       ← 그 실행에서 대상에 나간 모든 능동 요청 (raw, 추가전용)
-        raw/                      ← 필요시 원본 응답 일부 보관 (evidence 인용 근거)
+        findings.json             ← 그 실행 시점의 스냅샷
 ```
 
-- `<ext>` = `md` ([attack-surface-schema.md](./attack-surface-schema.md) 후보 A' 채택됨 — Target/Observed/Potential Attack Surface 3단 텍스트, 필요시 Notes 섹션 추가). 후보 B(JSON)를 나중에 다시 채택하면 `json`으로 바뀔 수 있다.
+- 형식은 dast-harness의 `AgentResult` JSON이다 ([output-contract.md](./output-contract.md)).
+- **별도 `execution_log.jsonl`을 두지 않는다.** 대상에 나간 요청은 `probe`가 돌려준
+  교환 기록으로 남고, 판단 근거가 된 것은 `findings[].evidence.exchanges`에,
+  거부된 것은 `completion.blocked`에 들어간다 — 결과 파일 하나가 실행 기록을 겸한다.
+  두 곳에 나눠 적으면 한쪽만 갱신되는 순간 서로 모순된다.
 - **run 히스토리는 영구 보존한다** (삭제/rotate 하지 않음). 재현성·사후 실행데이터 분석이 프로젝트 핵심 목표이므로 이력을 지우지 않는다.
-- 최상단 `attack-surface.json`은 매 실행마다 최신 run의 내용으로 덮어쓴다. "지금 기준 상태"만 보면 되는 소비자(후속 vuln-agent)는 이 파일만 읽으면 된다.
+- 최상단 `findings.json`은 매 실행마다 최신 run의 내용으로 덮어쓴다. "지금 기준 상태"만 보면 되는 소비자(후속 vuln-agent)는 이 파일만 읽으면 된다.
 
 ## `run-timestamp` 형식
 

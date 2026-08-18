@@ -1,12 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(curl *)",
+      "Bash(dast-harness probe:*)",
+      "Bash(dast-harness ingest:*)",
+      "Bash(python -m dast_harness.validate:*)",
       "Bash(nslookup *)",
-      "Bash(whois *)",
-      "Bash(PATH=\"/c/Program Files (x86)/Nmap:$PATH\" nmap *)",
-      "Bash(PATH=\"/c/Users/KDT40/AppData/Local/Microsoft/WinGet/Packages/ffuf.ffuf_Microsoft.Winget.Source_8wekyb3d8bbwe:$PATH\" ffuf *)",
-      "Bash(python tools/validate_attack_surface.py *)"
+      "Bash(whois *)"
     ]
   }
 }

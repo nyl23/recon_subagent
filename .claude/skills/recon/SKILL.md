@@ -9,9 +9,17 @@ description: 웹 대상 External Recon 절차(정보수집·서비스식별·기
 
 절차는 순서대로 진행하되, 각 단계는 "시도 → 결과(성공/실패/스킵 사유) 기록"이 원칙이다. 무언가를 못 찾았다는 것도 유효한 결과다 — 조용히 넘어가지 말고 반드시 기록한다.
 
-현재 채택된 출력 포맷은 `Target / Observed / Potential Attack Surface` 3단 텍스트다 (`reference/attack-surface-schema.md` 후보 A'). 아래 절차에서 "기록한다"는 이 포맷 중 해당하는 섹션에 한 줄로 적는다는 뜻이다. **`Observed`와 `Potential Attack Surface`에서 같은 endpoint를 가리킬 때는 문자열을 완전히 동일하게 쓴다** — Orchestrator가 이 둘을 문자열 매칭으로 연결해서 다음 Agent에게 최소한만 넘기기 때문이다 (스키마 문서의 "Orchestrator가 최소 컨텍스트를 추리는 방법" 참고).
+출력은 dast-harness의 `AgentResult` JSON이다 (`reference/output-contract.md`).
+아래 절차에서 **"씨앗으로 남긴다"**는 `request_seeds[]`에 항목 하나를 넣는다는 뜻이고,
+**"finding으로 남긴다"**는 `findings[]`에 넣는다는 뜻이다.
 
-사용 가능한 도구(이름·실행위치·호출형식·플래그·wordlist·제한값)는 전부 `reference/tools.json`에 정의되어 있다. 아래 절차에서 도구를 언급할 때는 그 파일의 정의를 그대로 따른다 — 플래그나 경로를 여기 별도로 적지 않는다.
+> 예전에는 `Observed`/`Potential Attack Surface` 두 섹션의 endpoint 표기를 문자
+> 그대로 맞춰야 했다. 구조화된 씨앗을 내면 그 규칙이 필요 없어진다 — 표기가
+> 어긋날 자리가 없다. 후속 Agent는 `params[].location`으로 자기 몫을 걸러간다.
+
+**타겟으로 나가는 요청은 전부 `dast-harness probe`를 지난다.** curl을 직접 쓰지
+않는 이유는 `reference/tools.json`의 `_porting_note`에 있다. 사용 가능한 도구는
+전부 그 파일에 정의되어 있고, 아래에서 도구를 언급할 때는 그 정의를 그대로 따른다.
 
 ## Step 0. Scope 확인 (필수, 항상 먼저)
 
@@ -20,18 +28,24 @@ description: 웹 대상 External Recon 절차(정보수집·서비스식별·기
 
 ## Step 1. 기본 정보 수집 (Passive-leaning)
 
-WebFetch/WebSearch/curl/nslookup/whois로 확인 가능한 범위에서:
-- 최상위 페이지 응답 (상태 코드, `Server`/`X-Powered-By`/`Via` 등 응답 헤더, HTML 내 메타 정보) — `WebFetch`가 실패하면(예: 순수 HTTP 대상) `curl -sI`/`curl -s`로 재시도
+`probe`(타겟 대상)와 `nslookup`/`whois`/WebSearch(타겟에 요청이 안 나가는 것)로:
+- 최상위 페이지 응답 (상태 코드, `Server`/`X-Powered-By`/`Via` 등 응답 헤더, HTML 내 메타 정보)
 - `robots.txt`, `sitemap.xml`, `/.well-known/security.txt`
 - 대상이 도메인이면 `nslookup`/`whois`로 기본 DNS/등록 정보 확인 (IP 직접 대상이면 스킵)
 - WebSearch로 대상 도메인 관련 공개 정보(서브도메인 언급, 기술 블로그, 채용공고의 기술스택 언급 등) — 공격적 스캔이 아닌 공개 정보 조회 수준
 
-> `WebFetch`가 http를 https로 강제 업그레이드해서 실패하는 경우, 같은 요청을 `curl`로 재시도한다 (GET/HEAD만, Safety Gate 참고).
+> 위 네 경로는 한 번에 묶어 보낸다 — `probe`는 배치를 받으므로 프로세스를 네 번
+> 띄울 이유가 없다. `WebFetch`가 http를 https로 강제 업그레이드하던 문제도 여기서는
+> 없다: `probe`는 준 URL을 그대로 보낸다.
 
 ## Step 2. 서비스/포트 식별
 
 1. 먼저 HTTP 기반 추정부터: 대상이 응답하는 스킴/포트(URL에 명시된 것, 리다이렉트 체인)를 확인하고, 응답 헤더/에러 페이지/TLS 인증서 정보에서 드러나는 서버 소프트웨어·버전 단서를 `Observed`에 한 줄로 기록한다 (예: `Apache HTTP Server`). 확정이 아니라 추정이면 문구에 드러낸다 (예: `Apache HTTP Server (추정, Server 헤더 기반)`).
-2. 대상이 어떤 포트를 열어놨는지 자체가 불확실하면(이미 아는 포트 하나만 확인하는 걸로는 부족하면) `tools.json`의 `nmap` 정의(호출 형식·고정 플래그)를 그대로 따라 실행한다. 결과에서 열린 포트/서비스/버전을 `Observed`에 한 줄씩 추가한다. nmap 실행도 능동 요청이므로 `execution_log`에 남긴다.
+2. **포트 탐색은 이 agent의 범위 밖이다.** `nmap`은 도구 목록에서 빠졌다 —
+   dast-harness의 안전 경계가 호스트 단위라 포트 스캔을 통과시킬 통로가 없기
+   때문이다(`tools.json`의 `_removed` 참고). 주어진 URL의 포트 외에 다른 포트가
+   의심되면 **추측하지 말고** `coverage.skip_reasons`에 `{"port-scan-out-of-scope": 1}`
+   로 남기고 Orchestrator에게 보고한다.
 
 ## Step 3. 기술 스택 추정
 
@@ -41,7 +55,9 @@ WebFetch/WebSearch/curl/nslookup/whois로 확인 가능한 범위에서:
 - 에러 페이지 시그니처 (스택트레이스, 프레임워크 특유 에러 포맷)
 - JS 번들 내 라이브러리 시그니처 (파일명, 주석, 소스맵 존재 여부)
 
-각 항목을 `Observed`에 한 줄씩 추가한다. 근거가 한눈에 안 보이는 항목이면 괄호로 짧게 덧붙인다 (예: `PHP (PHPSESSID 쿠키 관찰)`).
+기술 스택 추정은 그 자체로 씨앗이나 finding이 아니다. 다음 단계의 판단 근거로 쓰고,
+노출로 볼 만한 것(예: 버전이 박힌 `X-Powered-By`)만 `findings`에 넣되
+`category`는 `information-disclosure`, `confidence`는 근거의 강도에 맞춘다.
 
 ## Step 4. Endpoint 탐색
 
@@ -52,55 +68,86 @@ WebFetch/WebSearch/curl/nslookup/whois로 확인 가능한 범위에서:
 4. 공개 API 문서 경로 관례 확인 (`/swagger.json`, `/openapi.json`, `/api-docs`, `/graphql`)
 5. Wayback Machine 등 공개 아카이브(WebFetch 가능 범위 내)로 과거 노출 경로 확인
 
-찾은 endpoint를 `Observed`에 한 줄씩 추가한다 (`/api/user endpoint` 처럼). 파라미터가 있고 다음 단계(Step 5/6)에서 중요해 보이면 endpoint 옆에 짧게 덧붙인다 (예: `/api/user?id= endpoint (숫자 id 파라미터)`). 응답 본문 전체는 저장하지 않는다 — 필요한 스니펫만 인용한다.
+찾은 endpoint를 **씨앗으로 남긴다.** 형식은 `reference/output-contract.md`.
+씨앗은 모양이 아니라 **실제로 보낼 수 있는 요청**이므로, 관측한 값을 지어내지 말고
+그대로 넣는다 (`/api/user?id=42` → `params[{name:"id", location:"query", value:"42",
+type:"int"}]`). `source`에 어디서 찾았는지 남긴다 — `link`/`form`/`robots.txt`/`js`/
+`sitemap`/`guess`.
 
-**수동적 방법으로 찾은 게 부족해 보이면(예: 링크가 거의 없는 앱), `tools.json`의 `ffuf` 정의대로 능동 탐색을 추가한다** — wordlist·스레드·타임아웃은 그 파일에 정해진 값만 쓴다. 발견된 경로도 `Observed`에 같은 방식으로 추가하고, `discovered_via`를 "ffuf"로 남긴다.
+응답 본문 전체는 저장하지 않는다. 증거로 쓸 교환만 `findings[].evidence`에 넣는다.
 
-> 수동적 방법을 건너뛰고 바로 ffuf부터 쓰지 않는다 — 링크로 이미 찾을 수 있는 걸 굳이 능동 요청으로 다시 찾을 필요는 없다 (불필요한 요청 최소화 원칙).
+**워드리스트 브루트포스는 이 agent의 범위 밖이다.** `ffuf`는 도구 목록에서 빠졌다
+(`tools.json`의 `_removed` 참고). `probe`는 배치 20건 상한이라 퍼징용이 아니다.
+수동적 방법으로 부족하면 **추측한 경로를 지어내지 말고** `coverage.skip_reasons`에
+`{"active-discovery-out-of-scope": 1}`로 남긴다.
+
+> 관례 경로 몇 개(`/swagger.json`, `/openapi.json`, `/api-docs`, `/graphql`)를
+> 확인하는 것은 브루트포스가 아니라 위 4번이다 — 그건 계속 한다. 다른 건 20건
+> 한도 안에서 한 배치로 묶어 보낸다.
 
 ## Step 5. Attack Surface 정리
 
-Step 4에서 모은 endpoint들을 아래 세 관점으로 **분류/태깅**한다 (하나의 endpoint가 여러 관점에 동시에 속할 수 있다). 이 세 관점은 실제 존재하는 후속 전문 Agent(Injection Agent / IDOR·Authorization Agent / Web Logic Agent)와 1:1로 대응한다 — 필요시 이 목록에 카테고리가 추가될 수 있다:
+**분류를 손으로 붙이지 않는다.** 후속 Agent는 씨앗의 구조에서 자기 몫을 걸러간다:
+
+```
+params[].location == "path"            → IDOR/Authorization Agent
+params[].location in ("query","body")  → Injection Agent
+```
+
+그러니 이 단계에서 할 일은 태깅이 아니라 **씨앗의 파라미터를 정확히 채웠는지
+확인하는 것**이다. `location`과 `type`이 틀리면 후속 Agent가 엉뚱한 데를 찌른다.
+아래 세 관점은 그 확인을 위한 체크리스트로만 쓴다:
 
 - **Injection 관점**: 사용자 입력이 서버로 전달되는 지점 (쿼리 파라미터, 폼 필드, JSON body 필드, 헤더 반영 등) → **Injection Agent**
 - **IDOR·Authorization 관점**: 객체 참조가 노출되는 지점(숫자 ID, UUID, 파일명 등 — 사용자별로 달라 보이는 리소스)과, 로그인/세션/권한 분기가 일어나는 지점(로그인 폼, 관리자 페이지, OAuth 콜백, 비밀번호 재설정)을 함께 묶는다 — "내 리소스가 아닌 걸 볼 수 있는가"와 "권한 없이 접근할 수 있는가"는 같은 Agent가 다룬다 → **IDOR/Authorization Agent**
 - **Web Logic 관점**: 비즈니스 로직/워크플로우상의 결함이 의심되는 지점 — 가격·수량·할인 등 클라이언트가 값을 지정할 수 있는 필드, 다단계 절차(주문→결제→확인 등)를 건너뛰거나 순서를 바꿀 수 있어 보이는 흐름, 반복 제한이 없어 보이는 민감한 액션 → **Web Logic Agent**
 
-이 분류가 바로 다음 단계(취약점 후보 생성)와 후속 전문 Agent 라우팅의 근거가 되므로, **근거(evidence) 없이 분류하지 않는다.**
+관점마다 "이 씨앗에 그걸 시험할 파라미터가 실제로 들어 있는가"를 확인한다.
+없으면 씨앗이 덜 채워진 것이다.
 
-## Step 6. 취약점 후보 생성 (Potential Attack Surface)
+## Step 6. 정찰이 직접 찾은 것만 finding으로
 
-Step 5의 분류를 바탕으로 `Potential Attack Surface` 섹션을 만든다. 형식은 `<endpoint> → <카테고리>(<신뢰도>) 검사 필요 (근거)`:
+**"검사 필요" 후보 목록은 더 이상 만들지 않는다.** 그건 씨앗이 이미 말하고 있고,
+후속 Agent가 구조에서 걸러간다 (Step 5).
 
-```
-- /search?q= → Injection(강함) 검사 필요 (q 파라미터 값이 응답에 그대로 반영됨)
-- /api/user?id= → IDOR/Authorization(강함) 검사 필요 (id만 바꿔서 타 사용자 정보 조회됨)
-- /admin → IDOR/Authorization(보통) 검사 필요
-- /api/order?price=&qty= → Web Logic(약함) 검사 필요
-```
+여기서 만드는 건 **정찰만이 찾을 수 있는 실제 취약점**이다. 예: robots.txt가
+비공개 경로를 광고하는데 그 경로가 인증 없이 열려 있다.
 
-- 반드시 **가설** 톤이다 ("검사 필요"이지 "취약하다"가 아니다). 확정 진술을 하지 않는다.
-- 카테고리는 `Injection` / `IDOR/Authorization` / `Web Logic` / 필요시 `Other`.
-- **신뢰도는 필수다** — `(강함)` / `(보통)` / `(약함)` 중 하나를 카테고리 뒤에 반드시 붙인다:
-  - `강함`: 반응/에러/직접 관찰로 근거가 분명함
-  - `보통`: 정황상 의심되지만 직접 확인은 못 함 (예: endpoint 이름/구조 기반 추정)
-  - `약함`: 근거가 약하지만 후보로는 남길 만함
-  - (이전엔 "근거가 자명하면 생략 가능"이었지만, Orchestrator가 신뢰도로 호출 여부를 거를 수 있어야 해서 이제 항상 표기한다.)
-- **endpoint 표기는 `Observed`에 적은 것과 문자 그대로 동일하게 쓴다.** Orchestrator가 이 문자열로 두 섹션을 연결하므로 표기가 어긋나면 안 된다.
-- **한 줄에는 endpoint 하나, 카테고리 하나만 담는다.** `/vulnerabilities/xss_r/, /vulnerabilities/xss_s/ → Injection(보통) 검사 필요`처럼 여러 endpoint를 쉼표로 묶거나, 하나의 endpoint에 대해 두 카테고리를 한 줄에 같이 적지 않는다 — `Observed`와의 문자열 매칭이 깨져서 Orchestrator가 최소 컨텍스트를 추릴 수 없게 된다. 여러 endpoint가 같은 근거를 공유하거나, 하나의 endpoint가 여러 카테고리에 걸치면(Step 5 참고) 줄을 그만큼 나눠서 적는다.
-- 근거는 한 줄로 짧게 덧붙인다 (예: `q 파라미터 값이 응답에 그대로 반영됨`). `강함`인데 근거가 없으면 안 된다 — 최소한 왜 강함인지는 한 줄 있어야 한다. `보통`/`약함`은 근거가 짧아도 된다.
+`findings[]`에 넣을 때:
 
-절대 하지 않는 것: 후보를 검증하겠다고 실제 payload를 보내는 것. 그건 후속 전문 Agent(Injection / IDOR·Authorization / Web Logic Agent)의 역할이다.
+- **확정 진술을 하지 않는 원칙은 그대로다.** 다만 표현을 "검사 필요"로 얼버무리는
+  대신 `confidence`로 말한다 — `confirmed`(첨부한 요청/응답만 보면 누구나 같은 결론)
+  / `firm`(증거는 명확하나 판단이 한 단계 들어감) / `tentative`(정황뿐, 사람 확인 필요)
+- **`confirmed`가 아니면 왜 낮췄는지 `rationale`에 적는다**
+- `severity`는 "진짜라면 공격자가 무엇을 할 수 있나"로만 정한다. 얼마나 확실한지는
+  `confidence`가 따로 말하므로 여기 섞지 않는다
+- `evidence`는 항상 필수다. **요청 하나만 담긴 evidence는 대개 증거가 아니다** —
+  "정상은 이런데 여기서는 이렇다"가 보여야 한다
+
+절대 하지 않는 것: 후보를 검증하겠다고 실제 payload를 보내는 것. 그건 후속 전문
+Agent(Injection / IDOR·Authorization / Web Logic)의 역할이다. 정찰이 보내는 요청은
+조회성이다.
 
 ## Step 7. 저장, 자가 검증, 보고
 
-1. 전체 결과를 `Target / Observed / Potential Attack Surface` 3단 포맷(`reference/attack-surface-schema.md` 후보 A')으로 저장한다. 막힌 점이 있었다면 `Notes` 섹션을 추가해 남긴다.
-2. 저장 경로·파일명(`.md` 또는 `.txt`)·run 이력 보존 규칙은 `reference/output-path-convention.md`를 따른다 (최신본 `recon-output/<target-slug>/attack-surface.<ext>` + `runs/<timestamp>/` 스냅샷 영구 보존).
-3. **저장 직후 `tools.json`의 `validate_attack_surface` 정의대로 자가 검증을 실행한다**: `python tools/validate_attack_surface.py <저장한 파일 경로>`. 위반이 나오면 지적된 줄을 규칙(신뢰도 필수, endpoint 표기 일관성)에 맞게 고치고 다시 검증한다. 계속 실패하면 `Notes`에 사유를 남기고 그대로 보고한다 (무한 반복하지 않는다).
-4. 대화 응답에는 파일 경로 + 요약(발견한 endpoint 수, 후보 수, 검증 통과 여부, Notes 유무)만 짧게 남긴다.
+1. 전체 결과를 `AgentResult` JSON으로 저장한다 (`reference/output-contract.md`).
+   막힌 점은 `coverage.skip_reasons`에 남긴다 — 자유 텍스트 `Notes` 대신 구조로.
+2. 저장 경로·run 이력 규칙은 `reference/output-path-convention.md`를 따른다
+   (최신본 `recon-output/<target-slug>/findings.json` + `runs/<timestamp>/` 스냅샷).
+3. **저장 직후 계약 검사를 실행한다**: `dast-harness ingest <저장한 파일 경로>`.
+   거부되면 메시지가 곧 수정 지시다 — 어느 finding의 어느 필드가 왜 틀렸고 뭐가
+   허용되는지 알려주므로 그대로 고쳐서 다시 검사한다. 계속 실패하면 사유를 보고에
+   적고 그대로 끝낸다 (무한 반복하지 않는다).
+4. 연습 타겟(`targets/vulnerable_app`)이었다면 자가 채점도 한다:
+   `python -m dast_harness.validate --ingest <파일>`. `FALSE POSITIVES`가 있으면
+   그건 감점이다 — 멀쩡하다고 문서화된 엔드포인트를 취약하다고 보고한 것이다.
+5. 대화 응답에는 파일 경로 + 요약(씨앗 수, finding 수, `ingest` 통과 여부, 채점
+   결과, `blocked` 유무)만 짧게 남긴다.
 
 ## 막히는 경우
 
 - 같은 조회를 반복해도 새로운 정보가 안 나오면 멈추고 다음 단계로 넘어간다 (같은 액션을 무한 반복하지 않는다).
-- 스코프 밖으로 나가야 확인 가능한 경우, 시도하지 말고 결과 파일 맨 아래 `Notes:` 섹션에 남긴다.
+- 스코프 밖으로 나가야 확인 가능한 경우, 시도하지 말고 `coverage.skip_reasons`에
+  남긴다. `probe`에 넣으면 어차피 거부되고 `completion.blocked`에 기록된다 —
+  **그 기록을 지우지 않는다.**
 - 판단이 애매한 기술스택/취약점 후보는 문구에 "추정"을 명시하되, 스스로 확정 짓지 않는다.
