@@ -1,0 +1,136 @@
+{
+  "agent": "recon",
+  "coverage": {
+    "unit": "endpoint",
+    "tested": 6,
+    "skipped": 2,
+    "skip_reasons": {
+      "port-scan-out-of-scope": 1,
+      "active-discovery-out-of-scope": 1
+    }
+  },
+  "completion": {
+    "requests_made": 6,
+    "blocked": []
+  },
+  "request_seeds": [
+    {
+      "method": "POST",
+      "url": "http://127.0.0.1:8080/login",
+      "params": [
+        {
+          "name": "username",
+          "location": "body",
+          "value": "alice",
+          "type": "string",
+          "json_path": ""
+        },
+        {
+          "name": "password",
+          "location": "body",
+          "value": "",
+          "type": "string",
+          "json_path": ""
+        }
+      ],
+      "body_content_type": "application/x-www-form-urlencoded",
+      "auth_required": false,
+      "observed_status": 401,
+      "observed_content_type": "text/html",
+      "source": "form"
+    },
+    {
+      "method": "GET",
+      "url": "http://127.0.0.1:8080/robots.txt",
+      "params": [],
+      "body_content_type": "",
+      "auth_required": false,
+      "observed_status": 200,
+      "observed_content_type": "text/plain",
+      "source": "guess"
+    }
+  ],
+  "findings": [
+    {
+      "scanner": "agent:recon",
+      "id": "user-enumeration-login",
+      "name": "로그인 실패 메시지가 계정 존재 여부를 알려줌 (username enumeration)",
+      "severity": "low",
+      "confidence": "confirmed",
+      "category": "information-disclosure",
+      "matched_at": "http://127.0.0.1:8080/login",
+      "description": "실재하는 계정과 없는 계정의 로그인 실패 응답이 서로 다른 문구를 돌려준다. 공격자가 유효한 사용자명 목록을 만들 수 있다.",
+      "tags": [
+        "recon",
+        "user-enumeration",
+        "information-disclosure"
+      ],
+      "evidence": {
+        "baseline_index": 0,
+        "rationale": "두 요청 모두 401이지만 본문이 다르다 — 실재 계정은 '비밀번호가 올바르지 않습니다', 없는 계정은 '존재하지 않는 사용자입니다'. 상태코드가 같으므로 타이밍이나 코드가 아니라 문구가 신호다.",
+        "exchanges": [
+          {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/login",
+            "status": 401,
+            "actor": "anon",
+            "request_headers": {
+              "User-Agent": "dast-harness-agent/0.1 (+local scan)",
+              "Accept-Encoding": "gzip",
+              "Content-Type": "application/x-www-form-urlencoded"
+            },
+            "request_body": "username=alice&password=wrong",
+            "response_headers": {
+              "Server": "AcmeHTTP/1.0 ",
+              "Date": "Tue, 18 Aug 2026 02:57:09 GMT",
+              "Content-Type": "text/plain; charset=utf-8",
+              "Content-Length": "41"
+            },
+            "response_excerpt": "비밀번호가 올바르지 않습니다",
+            "note": "기준선: 실재 계정 + 틀린 비밀번호",
+            "elapsed_ms": 10
+          },
+          {
+            "method": "POST",
+            "url": "http://127.0.0.1:8080/login",
+            "status": 401,
+            "actor": "anon",
+            "request_headers": {
+              "User-Agent": "dast-harness-agent/0.1 (+local scan)",
+              "Accept-Encoding": "gzip",
+              "Content-Type": "application/x-www-form-urlencoded"
+            },
+            "request_body": "username=nosuchuser&password=wrong",
+            "response_headers": {
+              "Server": "AcmeHTTP/1.0 ",
+              "Date": "Tue, 18 Aug 2026 02:57:09 GMT",
+              "Content-Type": "text/plain; charset=utf-8",
+              "Content-Length": "38"
+            },
+            "response_excerpt": "존재하지 않는 사용자입니다",
+            "note": "대조: 없는 계정 + 틀린 비밀번호",
+            "elapsed_ms": 0
+          }
+        ]
+      },
+      "agent_data": {
+        "recon": {
+          "strategy": "login-differential",
+          "target": "/login",
+          "target_kind": "endpoint",
+          "attempts": 2,
+          "hits": [
+            "alice"
+          ],
+          "actors": [
+            "anon"
+          ],
+          "withheld": [
+            "credential-bruteforce",
+            "account-lockout-probing"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,5 +1,22 @@
 # recon-agent 팀 가이드
 
+> ### ⚠️ 2026-08 dast-harness 이식됨
+>
+> 이 agent는 이제 팀 공용 하네스([dast-harness](https://github.com/moovingGun/dast-harness))
+> 위에서 돈다. 바뀐 것:
+>
+> | 예전 | 지금 |
+> |---|---|
+> | `curl` / `nmap` / `ffuf` 직접 호출 | `dast-harness probe` (매 요청 `safety.py` 통과) |
+> | `attack-surface.md` 자유 텍스트 3단 | `findings.json` — `AgentResult` 계약 |
+> | `tools/validate_attack_surface.py` | `dast-harness ingest` |
+> | 자체 lab-target | `targets/vulnerable_app` (정답지가 있어 **채점된다**) |
+>
+> 역할·경계·Safety Gate·탐색 절차는 그대로다. **배관만 갈아끼웠다.**
+> 아래 문서 중 결정 로그·실험 기록은 **이식 이전** 시점의 것이며, 기록으로 보존한다.
+> 지금 기준의 형식은 [`output-contract.md`](../.claude/skills/recon/reference/output-contract.md),
+> 도구는 [`tools.json`](../.claude/skills/recon/reference/tools.json)을 본다.
+
 > 이 문서를 처음 보는 팀원을 위한 안내서입니다. "이게 뭐 하는 agent인지", "어디까지 되고 어디부터 안 되는지"를 5분 안에 파악할 수 있게 정리했습니다. 프로젝트를 만들면서 있었던 시행착오(하네스 엔지니어링 결정 로그)까지 전부 보고 싶다면 [`../README.md`](../README.md)를 보세요 — 이 문서는 그중 "지금 결과물이 뭔가"만 추립니다.
 
 ## TL;DR
@@ -9,8 +26,8 @@
 | | |
 |---|---|
 | 무엇을 받나 | 대상 URL, 허용 스코프 |
-| 무엇을 하나 | 정보수집 → 서비스/포트 식별 → 기술스택 추정 → Endpoint 탐색 → 분류 → 취약점 후보 나열 |
-| 무엇을 내놓나 | `recon-output/<대상>/attack-surface.md` (Target / Observed / Potential Attack Surface 3단 텍스트) |
+| 무엇을 하나 | 정보수집 → 기술스택 추정 → Endpoint 탐색 → 요청 씨앗 작성 (포트 탐색·능동 브루트포스는 범위 밖) |
+| 무엇을 내놓나 | `recon-output/<대상>/findings.json` (`AgentResult` — `request_seeds[]` + `findings[]`) |
 | 무엇을 안 하나 | 실제 공격, 취약점 확정, 다음 agent 결정 |
 
 ## 1. 왜 이걸 만들었나
@@ -88,32 +105,42 @@ recon-output/<target-slug>/
 
 `recon-output/`는 실제 조사 대상 정보를 담아서 `.gitignore`돼 있습니다 — 저장소를 clone해도 안 보입니다. 직접 recon-agent를 돌려봐야 생깁니다.
 
-## 5. 출력 예시 — Attack Surface 포맷
+## 5. 출력 예시 — `findings.json`
 
-`Target / Observed / Potential Attack Surface` 3단 텍스트입니다 (JSON이 아닌 이유는 8절 참고).
+dast-harness의 `AgentResult` JSON이다. 전체 필드는
+[`output-contract.md`](../.claude/skills/recon/reference/output-contract.md),
+**실제로 두 관문을 통과시킨 예시**는
+[`example-findings.json`](../.claude/skills/recon/reference/example-findings.json)에 있다.
 
+```json
+{
+  "agent": "recon",
+  "coverage": {"unit": "endpoint", "tested": 6, "skipped": 2,
+               "skip_reasons": {"port-scan-out-of-scope": 1}},
+  "completion": {"requests_made": 6, "blocked": []},
+  "request_seeds": [
+    {"method": "POST", "url": "http://127.0.0.1:8080/login",
+     "params": [{"name": "username", "location": "body", "value": "alice", "type": "string"}],
+     "observed_status": 401, "source": "form"}
+  ],
+  "findings": [ ... ]
+}
 ```
-Target: http://127.0.0.1:8082
 
-Observed:
-- /search?q= endpoint (q 값이 응답 본문에 그대로 반영됨)
-- /user?id= endpoint (숫자 id 파라미터, 소유권 확인 없이 다른 사용자 정보 반환)
-- /admin endpoint (인증 없이 접근 가능, 링크로는 노출되지 않음 — 능동 탐색으로 발견)
+예전 포맷과 견줘 달라진 점:
 
-Potential Attack Surface:
-- /search?q= → Injection(강함) 검사 필요 (q 값이 이스케이프 없이 반영됨)
-- /user?id= → IDOR/Authorization(강함) 검사 필요 (id만 바꿔서 타 사용자 정보 조회됨)
-- /admin → IDOR/Authorization(강함) 검사 필요 (인증/권한 검사 부재 직접 확인됨)
+- **`Potential Attack Surface` 섹션이 없어졌다.** 후속 Agent는 씨앗의
+  `params[].location`으로 자기 몫을 걸러간다 (`path` → IDOR, `query`/`body` → Injection).
+  카테고리를 손으로 태깅할 필요가 사라졌다.
+- **endpoint 표기를 문자 그대로 맞춰야 했던 규칙도 사라졌다.** 표기가 어긋날 자리가
+  없다 — 그 규칙은 자유 텍스트를 grep으로 잇기 위한 보완책이었다.
+- 신뢰도(`강함`/`보통`/`약함`)는 finding의 `confidence`(`confirmed`/`firm`/`tentative`)가
+  대신한다. **확정 진술을 하지 않는 원칙은 그대로다.**
+- `Notes:` 대신 `coverage.skip_reasons`에 구조로 남긴다.
 
-Notes:
-- (막힌 점이나 스코프 밖이라 확인 못 한 것이 있으면 여기에)
-```
-
-규칙 두 가지가 중요합니다:
-- **신뢰도(`강함`/`보통`/`약함`)는 카테고리 뒤에 필수로 붙습니다.** Orchestrator가 이 값으로 "부를 가치가 있는지"를 기계적으로 거를 수 있게 하기 위해서입니다.
-- **`Potential Attack Surface`의 endpoint 문자열은 `Observed`에 적은 것과 완전히 동일해야 합니다.** Orchestrator가 이 문자열로 두 섹션을 grep 연결해서, 다음 Agent에게 `Target` + 해당 후보 줄 + 관련 관찰 사실만 추려 넘길 수 있습니다 — 파일 전체를 안 넘겨도 되는 이유입니다.
-
-이 두 규칙은 `tools/validate_attack_surface.py`가 저장 직후 자동으로 검증합니다.
+저장 직후 `dast-harness ingest <파일>`로 계약을 검사한다. 거부 메시지가 곧 수정
+지시다. 연습 타겟이었다면 `python -m dast_harness.validate --ingest <파일>`로 자가
+채점까지 한다.
 
 ## 6. 안전장치 (Safety Gate)
 
@@ -133,11 +160,12 @@ Claude Code의 체크포인트/되돌리기는 **파일 편집만** 되돌릴 �
 
 | 도구 | 실행 위치 | 용도 | 제약 |
 |---|---|---|---|
-| `curl` | 로컬 | 조회성 HTTP 확인 | GET/HEAD만 |
+| `dast-harness probe` | 로컬 | **타겟으로 나가는 유일한 통로** | 매 요청 `safety.py` 통과, 리다이렉트 미추적, 배치 20건 |
 | `nslookup` / `whois` | 로컬 | DNS/등록정보 조회 | 도메인 대상일 때만 |
-| `nmap` | 로컬(Windows 네이티브) | 포트/서비스 존재 확인 | `-Pn -sV --top-ports 500 -T3` 고정, 공격적 타이밍/취약점 스크립트 금지 |
-| `ffuf` | 로컬(Windows 네이티브) | 능동 디렉터리/파일 탐색 | 지정 wordlist만, 스레드 ≤10, 수동 탐색 소진 후에만 |
-| `validate_attack_surface.py` | 로컬 | 출력 형식 자가 검증 | 저장 직후 항상 실행 |
+| ~~`nmap`~~ | — | **제거됨** | `safety.py`가 호스트 단위 인증이라 포트 스캔을 통과시킬 통로가 없다 |
+| ~~`ffuf`~~ | — | **제거됨** | `probe`는 배치 20건 상한이라 워드리스트 퍼징용이 아니다 |
+| `dast-harness ingest` | 로컬 | 계약 자가 검증 | 저장 직후 항상 실행 |
+| `python -m dast_harness.validate` | 로컬 | 정답지 대비 자가 채점 | 연습 타겟에서만 |
 
 전부 [`tools.json`](../.claude/skills/recon/reference/tools.json)에 단일 정의돼 있고, `.claude/settings.json`의 실행 권한도 여기서 자동 생성됩니다(`tools/sync_permissions.py`).
 

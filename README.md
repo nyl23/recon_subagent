@@ -1,5 +1,22 @@
 # recon_subagent
 
+> ### ⚠️ 2026-08 dast-harness 이식됨
+>
+> 이 agent는 이제 팀 공용 하네스([dast-harness](https://github.com/moovingGun/dast-harness))
+> 위에서 돈다. 바뀐 것:
+>
+> | 예전 | 지금 |
+> |---|---|
+> | `curl` / `nmap` / `ffuf` 직접 호출 | `dast-harness probe` (매 요청 `safety.py` 통과) |
+> | `attack-surface.md` 자유 텍스트 3단 | `findings.json` — `AgentResult` 계약 |
+> | `tools/validate_attack_surface.py` | `dast-harness ingest` |
+> | 자체 lab-target | `targets/vulnerable_app` (정답지가 있어 **채점된다**) |
+>
+> 역할·경계·Safety Gate·탐색 절차는 그대로다. **배관만 갈아끼웠다.**
+> 아래 문서 중 결정 로그·실험 기록은 **이식 이전** 시점의 것이며, 기록으로 보존한다.
+> 지금 기준의 형식은 [`output-contract.md`](.claude/skills/recon/reference/output-contract.md),
+> 도구는 [`tools.json`](.claude/skills/recon/reference/tools.json)을 본다.
+
 > 👋 **팀에 처음 공유받았다면** 이 README(하네스 엔지니어링 결정 로그 포함, 시행착오 전부)보다 [`docs/recon-agent-guide.md`](docs/recon-agent-guide.md)를 먼저 읽는 걸 추천합니다 — "지금 이 agent가 뭘 하는지"만 5분 안에 정리해둔 문서입니다. 이 README는 "왜 지금 이 형태가 됐는지"까지 시간순으로 남긴 빌드 로그입니다.
 
 ## 이 프로젝트가 검증하려는 것
